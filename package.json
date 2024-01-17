@@ -1,23 +1,23 @@
 {
   "name": "with-file-cache",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Add filesystem-based cache to functions",
   "main": "dist/index.js",
-	"type": "module",
-	"keywords": [
+  "type": "module",
+  "keywords": [
     "cache"
   ],
-	"files": [
+  "files": [
     "dist"
   ],
-	"repository": "github:sashee/with-file-cache",
-	"scripts": {
+  "repository": "github:sashee/with-file-cache",
+  "scripts": {
     "test": "TS_NODE_TRANSPILE_ONLY=true node --test --loader ts-node/esm  src/**/*.test.ts",
     "build": "tsc --build",
     "clean": "tsc --build --clean",
     "prepare": "npm run clean && npm run build"
   },
-	"author": {
+  "author": {
     "name": "Tamas Sallai",
     "url": "https://advancedweb.hu/"
   },
