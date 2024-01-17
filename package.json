@@ -22,8 +22,13 @@
     "url": "https://advancedweb.hu/"
   },
   "license": "ISC",
-  "dependencies": {
+	"devDependencies": {
+    "ts-essentials": "^9.4.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
+	},
+  "dependencies": {
+    "find-cache-dir": "^5.0.0",
+    "xxhash-addon": "^2.0.3"
   }
 }
