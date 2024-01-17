@@ -1,6 +1,6 @@
 {
   "name": "with-file-cache",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Add filesystem-based cache to functions",
   "main": "dist/index.js",
   "type": "module",
@@ -22,11 +22,11 @@
     "url": "https://advancedweb.hu/"
   },
   "license": "ISC",
-	"devDependencies": {
+  "devDependencies": {
     "ts-essentials": "^9.4.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
-	},
+  },
   "dependencies": {
     "find-cache-dir": "^5.0.0",
     "xxhash-addon": "^2.0.3"
