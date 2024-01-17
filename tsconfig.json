@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "noEmitOnError": true,
+
+		"strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": true,
+
+    "sourceMap": true,
+    "target": "es2022",
+		"module": "es2022",
+    "moduleResolution": "bundler",
+		"declaration": true,
+    "outDir": "dist"
+  },
+  "include": [
+    "src/**/*.*"
+  ],
+	"exclude": [
+		"**/*.test.ts",
+		"node_modules/fast-equals/dist/**/*.d.ts"
+	]
+}
