@@ -12,7 +12,7 @@
   ],
   "repository": "github:sashee/with-file-cache",
   "scripts": {
-    "test": "TS_NODE_TRANSPILE_ONLY=true node --test --loader ts-node/esm  src/**/*.test.ts",
+    "test": "TS_NODE_TRANSPILE_ONLY=true node --test --enable-source-maps --loader ts-node/esm  src/**/*.test.ts",
     "build": "tsc --build",
     "clean": "tsc --build --clean",
     "prepare": "npm run clean && npm run build"
@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "find-cache-dir": "^5.0.0",
+    "rxjs": "^7.8.1",
     "xxhash-addon": "^2.0.3"
   }
 }

@@ -21,6 +21,7 @@
   ],
 	"exclude": [
 		"**/*.test.ts",
+		"src/tests/**/*.*",
 		"node_modules/fast-equals/dist/**/*.d.ts"
 	]
 }
