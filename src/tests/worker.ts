@@ -4,7 +4,7 @@ import {mock} from "node:test";
 import {AsyncOrSync} from "ts-essentials";
 import {setTimeout} from "node:timers/promises";
 import util from "node:util";
-import {debug} from "debug-next";
+import debug from "debug";
 
 const log = debug("with-file-cache:test:worker");
 
@@ -67,7 +67,14 @@ parentPort!.on("message", async ({type, runnerId, taskId, requestId, param}) => 
 			parentPort?.postMessage({type: "response", requestId, error: "Runner with id: " + runnerId + " does not exist"});
 		}
 	}else if (type === "resolve") {
-		runners[runnerId].tasks[taskId].resolve(param);
+		const resolveValue = (() => {
+			if (param.buffer) {
+				return Buffer.from(param);
+			}else {
+				return param;
+			}
+		})();
+		runners[runnerId].tasks[taskId].resolve(resolveValue);
 		parentPort?.postMessage({type: "response", requestId});
 	}else if (type === "reject") {
 		runners[runnerId].tasks[taskId].reject(param);

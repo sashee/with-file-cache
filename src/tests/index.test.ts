@@ -6,11 +6,10 @@ import {Worker, BroadcastChannel} from "node:worker_threads";
 import path from "node:path";
 import url from "node:url";
 import {AsyncOrSync, ValueOf} from "ts-essentials";
-import {setTimeout} from "node:timers/promises";
 import {Observable, firstValueFrom} from "rxjs";
 import {share, filter, first, tap} from "rxjs/operators";
 import util from "node:util";
-import {debug} from "debug-next";
+import debug from "debug";
 
 const log = debug("with-file-cache:test");
 
@@ -465,6 +464,26 @@ describe("inter-worker concurrency", () => {
 });
 
 describe("serialize/deserialize", () => {
+	it("supports returning Buffer directly without serialization", async () => {
+		const testId = crypto.randomUUID();
+		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg) => Buffer.from(arg, "utf8"), {calcCacheKey: (arg) => arg});
+		const worker = await makeWorker(testId);
+		try {
+			const callWorker = makeCallWorker(worker);
+
+			await callWorker({type: "initRunner", runnerId: "1"});
+			await callWorker({type: "startTask", runnerId: "1", taskId: "1", param: "a"});
+			await callWorker({type: "waitForCalled", runnerId: "1", taskId: "1"});
+			await callWorker({type: "resolve", runnerId: "1", taskId: "1", param: Buffer.from("abc", "utf8")});
+
+			const res1 = await runner("a");
+			console.log(res1)
+			assert(Buffer.isBuffer(res1));
+			assert.equal(res1.toString("utf8"), "abc");
+		}finally {
+			await worker.terminate();
+		}
+	});
 	it("calls the serializer when a value is written to the disk", async () => {
 		const testId = crypto.randomUUID();
 		const serializer = mock.fn((value) => {

@@ -10,11 +10,14 @@ import {ValueOf} from "ts-essentials";
 import {Observable, firstValueFrom} from "rxjs";
 import {share, filter, first, tap} from "rxjs/operators";
 import util from "node:util";
-import {debug} from "debug-next";
+import debug from "debug";
 
 const log = debug("with-file-cache");
 
 export const fastHash = (x: Parameters<crypto.Hash["update"]>[0]) => XXHash.XXHash3.hash(Buffer.from(x)).toString("hex");
+
+const DEFAULT_SERIALIZATION_BUFFER = Buffer.from("[[BUFFER]]", "utf8");
+const DEFAULT_SERIALIZATION_JS = Buffer.from("[[JS]]", "utf8");
 
 export const withFileCache = (() => {
 	const cacheDir = (async () => {
@@ -60,7 +63,7 @@ export const withFileCache = (() => {
 					const handler = (message: any) => {
 						assert(allowedTypes.includes(message.data.type), `message.data.type is outside the allowed values: ${message.data.type}`);
 						assert(typeof message.data.cacheKey === "string", `message.data.cacheKey is not string: ${message.data.cacheKey}`);
-						log("data", message.data, "mainThread", isMainThread, "threadId", threadId);
+						debug("with-file-cache:broadcastchannel")("data", message.data, "mainThread", isMainThread, "threadId", threadId);
 						subscriber.next(message.data);
 					};
 					(bc as any as EventTarget).addEventListener("message", handler);
@@ -70,7 +73,7 @@ export const withFileCache = (() => {
 				}).pipe(share());
 				const coordinator: Coordinator = {
 					task: (cacheKey, serialize, deserialize, fn) => {
-						log("task for: ", cacheKey, " inprogress", inProgress, "mainThread", isMainThread, "threadId", threadId);
+						log("new task", "cacheKey", cacheKey, " inprogress", inProgress, "mainThread", isMainThread, "threadId", threadId);
 						if (inProgress[cacheKey] === undefined) {
 							const memoryCachedValue = memoryCache.get(cacheKey);
 							if (memoryCachedValue !== undefined) {
@@ -82,7 +85,11 @@ export const withFileCache = (() => {
 									const result = await (async () => {
 										const readFromCache = async () => {
 											const serialized = await fs.readFile(cacheFile);
-											return deserialize ? (await deserialize(serialized)) : JSON.parse(serialized.toString("utf8")).val as Awaited<ReturnType<typeof fn>>;
+											return deserialize ? (await deserialize(serialized)) : (
+												(serialized.length >= DEFAULT_SERIALIZATION_BUFFER.length && serialized.compare(DEFAULT_SERIALIZATION_BUFFER, 0, DEFAULT_SERIALIZATION_BUFFER.length, 0, DEFAULT_SERIALIZATION_BUFFER.length) === 0) ?
+												serialized.subarray(DEFAULT_SERIALIZATION_BUFFER.length) :
+												JSON.parse(serialized.subarray(DEFAULT_SERIALIZATION_JS.length).toString("utf8")).val
+											) as Awaited<ReturnType<typeof fn>>;
 										}
 										try {
 											return await readFromCache();
@@ -91,7 +98,11 @@ export const withFileCache = (() => {
 												const processAndWrite = async () => {
 													const result = await fn();
 
-													const serialized = serialize ? (await serialize(result)) : JSON.stringify({val: result});
+													const serialized = serialize ? (await serialize(result)) : (
+														Buffer.isBuffer(result) ?
+															Buffer.concat([DEFAULT_SERIALIZATION_BUFFER, result]) :
+															Buffer.concat([DEFAULT_SERIALIZATION_JS, Buffer.from(JSON.stringify({val: result}))])
+													);
 													// atomic write => write to a tempfile, then atomically rename
 													const tempFile = `${cacheFile}-${crypto.randomBytes(Math.ceil(5)).toString("hex")}`;
 													await fs.writeFile(tempFile, serialized);
@@ -157,7 +168,11 @@ export const withFileCache = (() => {
 										return memoryCachedValue as Promise<Awaited<ReturnType<typeof fn>>>;
 									}
 									const serialized = await fs.readFile(cacheFile);
-									const result = deserialize ? (await deserialize(serialized)) : JSON.parse(serialized.toString("utf8")).val as Awaited<ReturnType<typeof fn>>;
+									const result = deserialize ? (await deserialize(serialized)) : (
+										serialized.compare(DEFAULT_SERIALIZATION_BUFFER, 0, DEFAULT_SERIALIZATION_BUFFER.length, 0, DEFAULT_SERIALIZATION_BUFFER.length) === 0 ?
+										serialized.subarray(DEFAULT_SERIALIZATION_BUFFER.length) :
+										JSON.parse(serialized.subarray(DEFAULT_SERIALIZATION_JS.length).toString("utf8")).val
+									) as Awaited<ReturnType<typeof fn>>;
 									memoryCache.set(cacheKey, result);
 									return result;
 								}else {
@@ -172,7 +187,6 @@ export const withFileCache = (() => {
 						filter(({type}) => type === "start"),
 					).subscribe(({cacheKey}) => {
 						if (inProgress[cacheKey] === undefined) {
-							log("in progress: ", inProgress, "cacheKey", cacheKey, "mainThread", isMainThread, "threadId", threadId);
 							inProgress[cacheKey] = (async () => {
 								bc.postMessage({type: "startack", cacheKey})
 								const {type} = await firstValueFrom($bc.pipe(
@@ -212,7 +226,6 @@ export const withFileCache = (() => {
 			return async (...args: Parameters<F>): Promise<Awaited<ReturnType<F>>> => {
 				const cacheKey = await (async () => {
 					const calculatedCacheKey = await calcCacheKey(...args);
-					log(calculatedCacheKey)
 					if (Array.isArray(calculatedCacheKey)) {
 						return fastHash((await Promise.all(calculatedCacheKey.map(async (v) => {
 							const vRes = await v;
@@ -227,7 +240,6 @@ export const withFileCache = (() => {
 						throw new Error("CalculatedCacheKey is undefined");
 					}else if (typeof calculatedCacheKey === "function") {
 						const vRes = await calculatedCacheKey();
-						log("vRes", vRes)
 						return fastHash(fastHash(String(vRes)) + fastHash(await calculatedBaseKey));
 					}else {
 						return fastHash(fastHash(String(calculatedCacheKey)) + fastHash(await calculatedBaseKey));
