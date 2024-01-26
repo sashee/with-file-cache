@@ -10,10 +10,22 @@ import {Observable, firstValueFrom} from "rxjs";
 import {share, filter, first, tap} from "rxjs/operators";
 import util from "node:util";
 import debug from "debug";
+import stream from "node:stream";
 
 const log = debug("with-file-cache:test");
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+//
+// https://stackoverflow.com/a/72891118
+const readStreamToBuffer = async (stream: stream.Readable) => {
+	const buffers = [] as Buffer[];
+
+	for await (const data of stream) {
+		buffers.push(data);
+	}
+
+	return Buffer.concat(buffers);
+}
 
 const withResolvers = <T> () => {
 	let resolve: (val: AsyncOrSync<T>) => void, reject: (reason: any) => void;
@@ -477,7 +489,6 @@ describe("serialize/deserialize", () => {
 			await callWorker({type: "resolve", runnerId: "1", taskId: "1", param: Buffer.from("abc", "utf8")});
 
 			const res1 = await runner("a");
-			console.log(res1)
 			assert(Buffer.isBuffer(res1));
 			assert.equal(res1.toString("utf8"), "abc");
 		}finally {
@@ -486,29 +497,32 @@ describe("serialize/deserialize", () => {
 	});
 	it("calls the serializer when a value is written to the disk", async () => {
 		const testId = crypto.randomUUID();
-		const serializer = mock.fn((value) => {
-			return value;
+		const serializer = mock.fn((value, writeable) => {
+			return stream.promises.pipeline(stream.Readable.from(Buffer.from(value, "utf8")), writeable);
 		});
-		await withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg) => arg, {calcCacheKey: (arg) => arg, serialize: serializer})("a");
+		await withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: serializer, deserialize: async (stream) => (await readStreamToBuffer(stream)).toString("utf8")})("a");
 		assert.equal(serializer.mock.calls.length, 1);
 		assert.equal(serializer.mock.calls[0].arguments[0], "a");
 	});
 	it("does not call the serializer when a value is already read from the disk", async () => {
 		const testId = crypto.randomUUID();
-		const serializer = mock.fn((value) => {
-			return value;
+		const serializer = mock.fn((value, writeable) => {
+			return stream.promises.pipeline(stream.Readable.from(Buffer.from(value, "utf8")), writeable);
 		});
-		withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg) => arg, {calcCacheKey: (arg) => arg})("a");
-		withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg) => arg, {calcCacheKey: (arg) => arg, serialize: serializer})("a");
+		withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg})("a");
+		withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: serializer, deserialize: async (stream) => (await readStreamToBuffer(stream)).toString("utf8")})("a");
 		assert.equal(serializer.mock.calls.length, 0);
 	});
 	it("deserializer is called when the value is read (different instance only, because of the memory cache)", async () => {
 		const testId = crypto.randomUUID();
-		const deserializer = mock.fn((value) => {
+		const {promise: calledPromise, resolve: calledResolve} = withResolvers<any>();
+		const deserializer = mock.fn(async (stream) => {
+			const value = await readStreamToBuffer(stream);
 			log(value)
-			return value;
+			calledResolve(value);
+			return value.toString("utf8");
 		});
-		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg) => arg, {calcCacheKey: (arg) => arg, deserialize: deserializer});
+		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: (res, writeable) => stream.promises.pipeline(stream.Readable.from(res), writeable), deserialize: deserializer});
 		const worker = await makeWorker(testId);
 		try {
 			const callWorker = makeCallWorker(worker);
@@ -520,28 +534,32 @@ describe("serialize/deserialize", () => {
 
 			await runner("a");
 			assert.equal(deserializer.mock.calls.length, 1);
-			assert(deserializer.mock.calls[0].arguments[0].toString("utf8").includes("abc"));
+			assert((await calledPromise).toString("utf8").includes("abc"));
 		}finally {
 			await worker.terminate();
 		}
 	});
 	it("if the main thread is calculating with different instances then there won't be a call to the deserializer", async () => {
 		const testId = crypto.randomUUID();
-		const deserializer = mock.fn((value) => {
+		const deserializer = mock.fn(async (stream) => {
+			const value = await readStreamToBuffer(stream);
 			log(value)
-			return value;
+			return value.toString("utf8");
 		});
-		await withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg) => arg, {calcCacheKey: (arg) => arg})("a");
-		await withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg) => arg, {calcCacheKey: (arg) => arg, deserialize: deserializer})("a");
+		await withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg})("a");
+		await withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: (res, writeable) => stream.promises.pipeline(stream.Readable.from(res), writeable), deserialize: deserializer})("a");
 		assert.equal(deserializer.mock.calls.length, 0);
 	});
 	it("when a worker finishes calculating then the deserializer is called in the main thread", async () => {
 		const testId = crypto.randomUUID();
-		const deserializer = mock.fn((value) => {
+		const {promise: calledPromise, resolve: calledResolve} = withResolvers<any>();
+		const deserializer = mock.fn(async (stream) => {
+			const value = await readStreamToBuffer(stream);
 			log(value)
+			calledResolve(value);
 			return "deserialized";
 		});
-		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg) => arg, {calcCacheKey: (arg) => arg, deserialize: deserializer});
+		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: (res, writeable) => stream.promises.pipeline(stream.Readable.from(res), writeable), deserialize: deserializer});
 		const worker = await makeWorker(testId);
 		try {
 			const callWorker = makeCallWorker(worker);
@@ -554,7 +572,7 @@ describe("serialize/deserialize", () => {
 			assert(await resProm, "deserialized");
 
 			assert.equal(deserializer.mock.calls.length, 1);
-			assert(deserializer.mock.calls[0].arguments[0].toString("utf8").includes("abc"));
+			assert((await calledPromise).toString("utf8").includes("abc"));
 		}finally {
 			await worker.terminate();
 		}

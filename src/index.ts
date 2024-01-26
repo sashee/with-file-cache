@@ -11,13 +11,67 @@ import {Observable, firstValueFrom} from "rxjs";
 import {share, filter, first, tap} from "rxjs/operators";
 import util from "node:util";
 import debug from "debug";
+import stream from "node:stream";
 
 const log = debug("with-file-cache");
 
 export const fastHash = (x: Parameters<crypto.Hash["update"]>[0]) => XXHash.XXHash3.hash(Buffer.from(x)).toString("hex");
 
-const DEFAULT_SERIALIZATION_BUFFER = Buffer.from("[[BUFFER]]", "utf8");
-const DEFAULT_SERIALIZATION_JS = Buffer.from("[[JS]]", "utf8");
+// https://stackoverflow.com/a/72891118
+const readStreamToBuffer = async (stream: stream.Readable) => {
+	const buffers = [] as Buffer[];
+
+	for await (const data of stream) {
+		buffers.push(data);
+	}
+
+	return Buffer.concat(buffers);
+}
+
+type CacheKeyElement = string | number | (() => AsyncOrSync<string | number>);
+
+type CalcCacheKey <F extends (...args: any[]) => any> = (...params: Parameters<F>) => AsyncOrSync<Array<AsyncOrSync<CacheKeyElement>> | CacheKeyElement>;
+type Serialize <F extends (...args: any[]) => any> = (result: Awaited<ReturnType<F>>, writeable: stream.Writable) => Promise<unknown>;
+type Deserialize <F extends (...args: any[]) => any> = (stream: stream.Readable) => Promise<Awaited<ReturnType<F>>> | Awaited<ReturnType<F>>;
+type Options<T extends (...args: any[]) => any> = {
+	calcCacheKey: CalcCacheKey<T>
+	serialize?: undefined,
+	deserialize?: undefined,
+} | {
+	calcCacheKey: CalcCacheKey<T>,
+	serialize: Serialize<T>,
+	deserialize: Deserialize<T>,
+}
+
+
+const {defaultSerializer, defaultDeserializer} = (() => {
+	const DEFAULT_SERIALIZATION_BUFFER = Buffer.from("[[BUFFER]]", "utf8");
+	const DEFAULT_SERIALIZATION_JS = Buffer.from("[[JS]]", "utf8");
+
+	const defaultSerializer = <T> (result: T, writeable: stream.Writable): Promise<void> => {
+		const buffer = Buffer.isBuffer(result) ?
+				Buffer.concat([DEFAULT_SERIALIZATION_BUFFER, result]) :
+				Buffer.concat([DEFAULT_SERIALIZATION_JS, Buffer.from(JSON.stringify({val: result}))]);
+		return stream.promises.pipeline(
+			stream.Readable.from(buffer),
+			writeable,
+		)
+	}
+
+	const defaultDeserializer = async <T> (stream: stream.Readable): Promise<T> => {
+		const serialized = await readStreamToBuffer(stream);
+		if (serialized.length >= DEFAULT_SERIALIZATION_BUFFER.length && serialized.compare(DEFAULT_SERIALIZATION_BUFFER, 0, DEFAULT_SERIALIZATION_BUFFER.length, 0, DEFAULT_SERIALIZATION_BUFFER.length) === 0) {
+			return serialized.subarray(DEFAULT_SERIALIZATION_BUFFER.length) as T;
+		}else {
+			return JSON.parse(serialized.subarray(DEFAULT_SERIALIZATION_JS.length).toString("utf8")).val as T;
+		}
+	};
+
+	return {
+		defaultSerializer,
+		defaultDeserializer,
+	};
+})();
 
 export const withFileCache = (() => {
 	const cacheDir = (async () => {
@@ -46,7 +100,7 @@ export const withFileCache = (() => {
 		}
 	})();
 	type Coordinator = {
-		task(cacheKey: string, serialize: any, deserialize: any, fn: any): Promise<any>,
+		task(cacheKey: string, serialize: Serialize<typeof fn> | undefined, deserialize: Deserialize<typeof fn> | undefined, fn: any): Promise<any>,
 	};
 	const coordinators = {} as {[broadcastChannelName: string]: Coordinator};
 
@@ -84,12 +138,8 @@ export const withFileCache = (() => {
 								try {
 									const result = await (async () => {
 										const readFromCache = async () => {
-											const serialized = await fs.readFile(cacheFile);
-											return deserialize ? (await deserialize(serialized)) : (
-												(serialized.length >= DEFAULT_SERIALIZATION_BUFFER.length && serialized.compare(DEFAULT_SERIALIZATION_BUFFER, 0, DEFAULT_SERIALIZATION_BUFFER.length, 0, DEFAULT_SERIALIZATION_BUFFER.length) === 0) ?
-												serialized.subarray(DEFAULT_SERIALIZATION_BUFFER.length) :
-												JSON.parse(serialized.subarray(DEFAULT_SERIALIZATION_JS.length).toString("utf8")).val
-											) as Awaited<ReturnType<typeof fn>>;
+											const stream = (await fs.open(cacheFile)).createReadStream();
+											return deserialize ? (await deserialize(stream)) : defaultDeserializer(stream) as Awaited<ReturnType<typeof fn>>;
 										}
 										try {
 											return await readFromCache();
@@ -98,14 +148,10 @@ export const withFileCache = (() => {
 												const processAndWrite = async () => {
 													const result = await fn();
 
-													const serialized = serialize ? (await serialize(result)) : (
-														Buffer.isBuffer(result) ?
-															Buffer.concat([DEFAULT_SERIALIZATION_BUFFER, result]) :
-															Buffer.concat([DEFAULT_SERIALIZATION_JS, Buffer.from(JSON.stringify({val: result}))])
-													);
+													const serializeToWriteable = serialize ?? defaultSerializer;
 													// atomic write => write to a tempfile, then atomically rename
 													const tempFile = `${cacheFile}-${crypto.randomBytes(Math.ceil(5)).toString("hex")}`;
-													await fs.writeFile(tempFile, serialized);
+													await serializeToWriteable(result, (await fs.open(tempFile, "ax")).createWriteStream());
 													await fs.rename(tempFile, cacheFile);
 													return result;
 												}
@@ -167,12 +213,8 @@ export const withFileCache = (() => {
 									if (memoryCachedValue !== undefined) {
 										return memoryCachedValue as Promise<Awaited<ReturnType<typeof fn>>>;
 									}
-									const serialized = await fs.readFile(cacheFile);
-									const result = deserialize ? (await deserialize(serialized)) : (
-										serialized.compare(DEFAULT_SERIALIZATION_BUFFER, 0, DEFAULT_SERIALIZATION_BUFFER.length, 0, DEFAULT_SERIALIZATION_BUFFER.length) === 0 ?
-										serialized.subarray(DEFAULT_SERIALIZATION_BUFFER.length) :
-										JSON.parse(serialized.subarray(DEFAULT_SERIALIZATION_JS.length).toString("utf8")).val
-									) as Awaited<ReturnType<typeof fn>>;
+									const stream = (await fs.open(cacheFile)).createReadStream();
+									const result = deserialize ? (await deserialize(stream)) : defaultDeserializer(stream) as Awaited<ReturnType<typeof fn>>;
 									memoryCache.set(cacheKey, result);
 									return result;
 								}else {
@@ -221,8 +263,7 @@ export const withFileCache = (() => {
 		})();
 		const calculatedBaseKey = baseKey?.() ?? "";
 
-		type CacheKeyElement = string | number | (() => AsyncOrSync<string | number>);
-		return <F extends (...args: any[]) => any>(fn: F, {calcCacheKey, serialize, deserialize}: {calcCacheKey: (...params: Parameters<F>) => AsyncOrSync<Array<AsyncOrSync<CacheKeyElement>> | CacheKeyElement>, serialize?: (result: Awaited<ReturnType<F>>) => Buffer | string | Promise<Buffer | string>, deserialize?: (str: Buffer) => Promise<Awaited<ReturnType<F>>> | Awaited<ReturnType<F>>}): (...args: Parameters<F>) => Promise<Awaited<ReturnType<F>>> => {
+		return <F extends (...args: any[]) => any>(fn: F, {calcCacheKey, serialize, deserialize}: Options<F>): (...args: Parameters<F>) => Promise<Awaited<ReturnType<F>>> => {
 			return async (...args: Parameters<F>): Promise<Awaited<ReturnType<F>>> => {
 				const cacheKey = await (async () => {
 					const calculatedCacheKey = await calcCacheKey(...args);
