@@ -12,13 +12,14 @@ import {share, filter, first, tap} from "rxjs/operators";
 import util from "node:util";
 import debug from "debug";
 import stream from "node:stream";
+import {ReadableStream, WritableStream} from "node:stream/web";
 
 const log = debug("with-file-cache");
 
 export const fastHash = (x: Parameters<crypto.Hash["update"]>[0]) => XXHash.XXHash3.hash(Buffer.from(x)).toString("hex");
 
 // https://stackoverflow.com/a/72891118
-const readStreamToBuffer = async (stream: stream.Readable) => {
+const readStreamToBuffer = async (stream: ReadableStream) => {
 	const buffers = [] as Buffer[];
 
 	for await (const data of stream) {
@@ -31,8 +32,8 @@ const readStreamToBuffer = async (stream: stream.Readable) => {
 type CacheKeyElement = string | number | (() => AsyncOrSync<string | number>);
 
 type CalcCacheKey <F extends (...args: any[]) => any> = (...params: Parameters<F>) => AsyncOrSync<Array<AsyncOrSync<CacheKeyElement>> | CacheKeyElement>;
-type Serialize <F extends (...args: any[]) => any> = (result: Awaited<ReturnType<F>>, writeable: stream.Writable) => Promise<unknown>;
-type Deserialize <F extends (...args: any[]) => any> = (stream: stream.Readable) => Promise<Awaited<ReturnType<F>>> | Awaited<ReturnType<F>>;
+type Serialize <F extends (...args: any[]) => any> = (result: Awaited<ReturnType<F>>, writeable: WritableStream) => Promise<unknown>;
+type Deserialize <F extends (...args: any[]) => any> = (stream: ReadableStream) => Promise<Awaited<ReturnType<F>>> | Awaited<ReturnType<F>>;
 type Options<T extends (...args: any[]) => any> = {
 	calcCacheKey: CalcCacheKey<T>
 	serialize?: undefined,
@@ -48,17 +49,17 @@ const {defaultSerializer, defaultDeserializer} = (() => {
 	const DEFAULT_SERIALIZATION_BUFFER = Buffer.from("[[BUFFER]]", "utf8");
 	const DEFAULT_SERIALIZATION_JS = Buffer.from("[[JS]]", "utf8");
 
-	const defaultSerializer = <T> (result: T, writeable: stream.Writable): Promise<void> => {
+	const defaultSerializer = <T> (result: T, writeable: WritableStream): Promise<void> => {
 		const buffer = Buffer.isBuffer(result) ?
 				Buffer.concat([DEFAULT_SERIALIZATION_BUFFER, result]) :
 				Buffer.concat([DEFAULT_SERIALIZATION_JS, Buffer.from(JSON.stringify({val: result}))]);
 		return stream.promises.pipeline(
 			stream.Readable.from(buffer),
-			writeable,
+			stream.Writable.fromWeb(writeable),
 		)
 	}
 
-	const defaultDeserializer = async <T> (stream: stream.Readable): Promise<T> => {
+	const defaultDeserializer = async <T> (stream: ReadableStream): Promise<T> => {
 		const serialized = await readStreamToBuffer(stream);
 		if (serialized.length >= DEFAULT_SERIALIZATION_BUFFER.length && serialized.compare(DEFAULT_SERIALIZATION_BUFFER, 0, DEFAULT_SERIALIZATION_BUFFER.length, 0, DEFAULT_SERIALIZATION_BUFFER.length) === 0) {
 			return serialized.subarray(DEFAULT_SERIALIZATION_BUFFER.length) as T;
@@ -138,8 +139,8 @@ export const withFileCache = (() => {
 								try {
 									const result = await (async () => {
 										const readFromCache = async () => {
-											const stream = (await fs.open(cacheFile)).createReadStream();
-											return deserialize ? (await deserialize(stream)) : defaultDeserializer(stream) as Awaited<ReturnType<typeof fn>>;
+											const readableStream = stream.Readable.toWeb((await fs.open(cacheFile)).createReadStream());
+											return deserialize ? (await deserialize(readableStream)) : defaultDeserializer(readableStream) as Awaited<ReturnType<typeof fn>>;
 										}
 										try {
 											return await readFromCache();
@@ -151,7 +152,7 @@ export const withFileCache = (() => {
 													const serializeToWriteable = serialize ?? defaultSerializer;
 													// atomic write => write to a tempfile, then atomically rename
 													const tempFile = `${cacheFile}-${crypto.randomBytes(Math.ceil(5)).toString("hex")}`;
-													await serializeToWriteable(result, (await fs.open(tempFile, "ax")).createWriteStream());
+													await serializeToWriteable(result, stream.Writable.toWeb((await fs.open(tempFile, "ax")).createWriteStream()));
 													await fs.rename(tempFile, cacheFile);
 													return result;
 												}
@@ -213,8 +214,8 @@ export const withFileCache = (() => {
 									if (memoryCachedValue !== undefined) {
 										return memoryCachedValue as Promise<Awaited<ReturnType<typeof fn>>>;
 									}
-									const stream = (await fs.open(cacheFile)).createReadStream();
-									const result = deserialize ? (await deserialize(stream)) : defaultDeserializer(stream) as Awaited<ReturnType<typeof fn>>;
+									const readableStream = stream.Readable.toWeb((await fs.open(cacheFile)).createReadStream());
+									const result = deserialize ? (await deserialize(readableStream)) : defaultDeserializer(readableStream) as Awaited<ReturnType<typeof fn>>;
 									memoryCache.set(cacheKey, result);
 									return result;
 								}else {

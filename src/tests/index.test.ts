@@ -11,13 +11,14 @@ import {share, filter, first, tap} from "rxjs/operators";
 import util from "node:util";
 import debug from "debug";
 import stream from "node:stream";
+import {ReadableStream, WritableStream} from "node:stream/web";
 
 const log = debug("with-file-cache:test");
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 //
 // https://stackoverflow.com/a/72891118
-const readStreamToBuffer = async (stream: stream.Readable) => {
+const readStreamToBuffer = async (stream: ReadableStream) => {
 	const buffers = [] as Buffer[];
 
 	for await (const data of stream) {
@@ -522,7 +523,7 @@ describe("serialize/deserialize", () => {
 			calledResolve(value);
 			return value.toString("utf8");
 		});
-		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: (res, writeable) => stream.promises.pipeline(stream.Readable.from(res), writeable), deserialize: deserializer});
+		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: (res, writeable) => stream.promises.pipeline(stream.Readable.from(res), stream.Writable.fromWeb(writeable)), deserialize: deserializer});
 		const worker = await makeWorker(testId);
 		try {
 			const callWorker = makeCallWorker(worker);
@@ -547,7 +548,7 @@ describe("serialize/deserialize", () => {
 			return value.toString("utf8");
 		});
 		await withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg})("a");
-		await withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: (res, writeable) => stream.promises.pipeline(stream.Readable.from(res), writeable), deserialize: deserializer})("a");
+		await withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: (res, writeable) => stream.promises.pipeline(stream.Readable.from(res), stream.Writable.fromWeb(writeable)), deserialize: deserializer})("a");
 		assert.equal(deserializer.mock.calls.length, 0);
 	});
 	it("when a worker finishes calculating then the deserializer is called in the main thread", async () => {
@@ -559,7 +560,7 @@ describe("serialize/deserialize", () => {
 			calledResolve(value);
 			return "deserialized";
 		});
-		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: (res, writeable) => stream.promises.pipeline(stream.Readable.from(res), writeable), deserialize: deserializer});
+		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg: string) => arg, {calcCacheKey: (arg) => arg, serialize: (res, writeable) => stream.promises.pipeline(stream.Readable.from(res), stream.Writable.fromWeb(writeable)), deserialize: deserializer});
 		const worker = await makeWorker(testId);
 		try {
 			const callWorker = makeCallWorker(worker);
