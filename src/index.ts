@@ -16,7 +16,7 @@ import {ReadableStream, WritableStream} from "node:stream/web";
 
 const log = debug("with-file-cache");
 
-export const fastHash = (x: Parameters<crypto.Hash["update"]>[0]) => XXHash.XXHash3.hash(Buffer.from(x)).toString("hex");
+export const fastHash = (x: string | Buffer) => XXHash.XXHash3.hash(Buffer.from(x)).toString("hex");
 
 // https://stackoverflow.com/a/72891118
 const readStreamToBuffer = async (stream: ReadableStream) => {
@@ -29,7 +29,7 @@ const readStreamToBuffer = async (stream: ReadableStream) => {
 	return Buffer.concat(buffers);
 }
 
-type CacheKeyElement = string | number | (() => AsyncOrSync<string | number>);
+type CacheKeyElement = string | number | Buffer | (() => AsyncOrSync<string | number | Buffer>);
 
 type CalcCacheKey <F extends (...args: any[]) => any> = (...params: Parameters<F>) => AsyncOrSync<Array<AsyncOrSync<CacheKeyElement>> | CacheKeyElement>;
 type Serialize <F extends (...args: any[]) => any> = (result: Awaited<ReturnType<F>>, writeable: WritableStream) => Promise<unknown>;
@@ -282,9 +282,17 @@ export const withFileCache = (() => {
 						throw new Error("CalculatedCacheKey is undefined");
 					}else if (typeof calculatedCacheKey === "function") {
 						const vRes = await calculatedCacheKey();
-						return fastHash(fastHash(String(vRes)) + fastHash(await calculatedBaseKey));
+						if (Buffer.isBuffer(vRes)) {
+							return fastHash(fastHash(vRes) + fastHash(await calculatedBaseKey));
+						}else {
+							return fastHash(fastHash(String(vRes)) + fastHash(await calculatedBaseKey));
+						}
 					}else {
-						return fastHash(fastHash(String(calculatedCacheKey)) + fastHash(await calculatedBaseKey));
+						if (Buffer.isBuffer(calculatedCacheKey)) {
+							return fastHash(fastHash(calculatedCacheKey) + fastHash(await calculatedBaseKey));
+						}else {
+							return fastHash(fastHash(String(calculatedCacheKey)) + fastHash(await calculatedBaseKey));
+						}
 					}
 				})();
 				return coordinator.task(cacheKey, serialize, deserialize, () => fn(...args));
