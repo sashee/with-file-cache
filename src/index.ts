@@ -274,6 +274,8 @@ export const withFileCache = (() => {
 							if (typeof vRes === "function") {
 								const vResRes = await vRes();
 								return fastHash(typeof(vResRes)) + fastHash(String(vResRes));
+							}else if (Buffer.isBuffer(vRes)) {
+								return fastHash("Buffer") + fastHash(vRes);
 							}else {
 								return fastHash(typeof(vRes)) + fastHash(String(vRes));
 							}
