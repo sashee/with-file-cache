@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import XXHash from "xxhash-addon";
 import findCacheDir from "find-cache-dir";
 import {AsyncOrSync} from "ts-essentials";
 import {isMainThread, BroadcastChannel, threadId} from "node:worker_threads";
@@ -13,10 +12,11 @@ import util from "node:util";
 import debug from "debug";
 import stream from "node:stream";
 import {ReadableStream, WritableStream} from "node:stream/web";
+import {xxhash64} from "hash-wasm";
 
 const log = debug("with-file-cache");
 
-export const fastHash = (x: string | Buffer) => XXHash.XXHash3.hash(Buffer.from(x)).toString("hex");
+export const fastHash = (x: string | Buffer) => xxhash64(Buffer.from(x));
 
 // https://stackoverflow.com/a/72891118
 const readStreamToBuffer = async (stream: ReadableStream) => {
@@ -269,31 +269,31 @@ export const withFileCache = (() => {
 				const cacheKey = await (async () => {
 					const calculatedCacheKey = await calcCacheKey(...args);
 					if (Array.isArray(calculatedCacheKey)) {
-						return fastHash((await Promise.all(calculatedCacheKey.map(async (v) => {
+						return await fastHash((await Promise.all(calculatedCacheKey.map(async (v) => {
 							const vRes = await v;
 							if (typeof vRes === "function") {
 								const vResRes = await vRes();
-								return fastHash(typeof(vResRes)) + fastHash(String(vResRes));
+								return await fastHash(typeof(vResRes)) + await fastHash(String(vResRes));
 							}else if (Buffer.isBuffer(vRes)) {
-								return fastHash("Buffer") + fastHash(vRes);
+								return await fastHash("Buffer") + await fastHash(vRes);
 							}else {
-								return fastHash(typeof(vRes)) + fastHash(String(vRes));
+								return await fastHash(typeof(vRes)) + await fastHash(String(vRes));
 							}
-						}))).join("") + fastHash(await calculatedBaseKey));
+						}))).join("") + await fastHash(await calculatedBaseKey));
 					}else if (calculatedCacheKey === undefined) {
 						throw new Error("CalculatedCacheKey is undefined");
 					}else if (typeof calculatedCacheKey === "function") {
 						const vRes = await calculatedCacheKey();
 						if (Buffer.isBuffer(vRes)) {
-							return fastHash(fastHash(vRes) + fastHash(await calculatedBaseKey));
+							return await fastHash(await fastHash(vRes) + await fastHash(await calculatedBaseKey));
 						}else {
-							return fastHash(fastHash(String(vRes)) + fastHash(await calculatedBaseKey));
+							return await fastHash(await fastHash(String(vRes)) + await fastHash(await calculatedBaseKey));
 						}
 					}else {
 						if (Buffer.isBuffer(calculatedCacheKey)) {
-							return fastHash(fastHash(calculatedCacheKey) + fastHash(await calculatedBaseKey));
+							return await fastHash(await fastHash(calculatedCacheKey) + await fastHash(await calculatedBaseKey));
 						}else {
-							return fastHash(fastHash(String(calculatedCacheKey)) + fastHash(await calculatedBaseKey));
+							return await fastHash(await fastHash(String(calculatedCacheKey)) + await fastHash(await calculatedBaseKey));
 						}
 					}
 				})();

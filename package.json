@@ -31,7 +31,7 @@
     "@types/debug": "^4.1.12",
     "debug": "^4.3.4",
     "find-cache-dir": "^5.0.0",
-    "rxjs": "^7.8.1",
-    "xxhash-addon": "^2.0.3"
+    "hash-wasm": "^4.11.0",
+    "rxjs": "^7.8.1"
   }
 }
