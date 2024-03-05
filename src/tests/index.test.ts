@@ -119,6 +119,21 @@ describe("basic", () => {
 	 		assert.equal(fn.mock.calls.length, 1);
 			assert.equal(res2, "a");
 		});
+		it("the function is only called once", async () => {
+			const testId = crypto.randomUUID();
+			const fn = mock.fn((arg: string) => {
+				return arg;
+			});
+			const mockBaseKey = mock.fn(() => {
+				return testId + "1";
+			});
+	 		assert.equal(mockBaseKey.mock.calls.length, 0);
+			const base = withFileCache({baseKey: mockBaseKey, broadcastChannelName: testId});
+			await base(fn, {calcCacheKey: (arg) => arg})("a");
+	 		assert.equal(mockBaseKey.mock.calls.length, 1);
+			await base(fn, {calcCacheKey: (arg) => arg})("a");
+	 		assert.equal(mockBaseKey.mock.calls.length, 1);
+		});
 	})
 });
 describe("in-process concurrency", () => {
@@ -622,6 +637,11 @@ describe("calcCacheKey", () => {
 		assert.equal(fn.mock.calls.length, 4);
 		await runner(["abc", 1, Promise.resolve(5)]);
 		assert.equal(fn.mock.calls.length, 4);
+		// Buffer
+		await runner([Buffer.from("abc", "utf8")]);
+		assert.equal(fn.mock.calls.length, 5);
+		await runner([Buffer.from("abc", "utf8")]);
+		assert.equal(fn.mock.calls.length, 5);
 	});
 	it("works when it returns a function", async () => {
 		const testId = crypto.randomUUID();
@@ -639,6 +659,11 @@ describe("calcCacheKey", () => {
 		assert.equal(fn.mock.calls.length, 2);
 		await runner(["abc", "1"]);
 		assert.equal(fn.mock.calls.length, 3);
+		// Buffer
+		await runner(Buffer.from("abcd", "utf8"));
+		assert.equal(fn.mock.calls.length, 4);
+		await runner(Buffer.from("abcd", "utf8"));
+		assert.equal(fn.mock.calls.length, 4);
 	});
 	it("works when it returns a function in an array", async () => {
 		const testId = crypto.randomUUID();
