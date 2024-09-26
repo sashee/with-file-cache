@@ -492,25 +492,6 @@ describe("inter-worker concurrency", () => {
 });
 
 describe("serialize/deserialize", () => {
-	it("supports returning Buffer directly without serialization", async () => {
-		const testId = crypto.randomUUID();
-		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})((arg) => Buffer.from(arg, "utf8"), {calcCacheKey: (arg) => arg});
-		const worker = await makeWorker(testId);
-		try {
-			const callWorker = makeCallWorker(worker);
-
-			await callWorker({type: "initRunner", runnerId: "1"});
-			await callWorker({type: "startTask", runnerId: "1", taskId: "1", param: "a"});
-			await callWorker({type: "waitForCalled", runnerId: "1", taskId: "1"});
-			await callWorker({type: "resolve", runnerId: "1", taskId: "1", param: Buffer.from("abc", "utf8")});
-
-			const res1 = await runner("a");
-			assert(Buffer.isBuffer(res1));
-			assert.equal(res1.toString("utf8"), "abc");
-		}finally {
-			await worker.terminate();
-		}
-	});
 	it("calls the serializer when a value is written to the disk", async () => {
 		const testId = crypto.randomUUID();
 		const serializer = mock.fn((value, writeable) => {
@@ -549,7 +530,7 @@ describe("serialize/deserialize", () => {
 			await callWorker({type: "resolve", runnerId: "1", taskId: "1", param: "abc"});
 
 			await runner("a");
-			assert.equal(deserializer.mock.calls.length, 1);
+			assert.equal(deserializer.mock.calls.length, 1, "");
 			assert((await calledPromise).toString("utf8").includes("abc"));
 		}finally {
 			await worker.terminate();
@@ -593,6 +574,101 @@ describe("serialize/deserialize", () => {
 			await worker.terminate();
 		}
 	});
+});
+
+describe("defaultSerializers", () => {
+	it("Buffer", async () => {
+		const testId = crypto.randomUUID();
+		const construct = (arg: any) => Buffer.from(arg, "utf8");
+		const fakeConstruct: typeof construct = () => {
+			process.exit(0);
+			throw new Error("Should not be called");
+		}
+		const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})(fakeConstruct, {calcCacheKey: (arg) => arg});
+		const worker = await makeWorker(testId);
+		try {
+			const callWorker = makeCallWorker(worker);
+
+			await callWorker({type: "initRunner", runnerId: "1"});
+			await callWorker({type: "startTask", runnerId: "1", taskId: "1", param: "abc"});
+			await callWorker({type: "waitForCalled", runnerId: "1", taskId: "1"});
+			await callWorker({type: "resolve", runnerId: "1", taskId: "1", param: {__type: "Buffer", __value: construct("abc")}});
+
+			const res1 = await runner("abc");
+			assert(Buffer.isBuffer(res1));
+			assert.equal(res1.toString("utf8"), "abc");
+		}finally {
+			await worker.terminate();
+		}
+	});
+	describe("TypedArrays", () => {
+		const test = async (construct: (arg: any) => any, values: any[]) => {
+			const testId = crypto.randomUUID();
+			const fakeConstruct: typeof construct = () => {
+				throw new Error("Should not be called");
+			}
+			const runner = withFileCache({baseKey: () => testId, broadcastChannelName: testId})(fakeConstruct, {calcCacheKey: (arg) => arg});
+			const worker = await makeWorker(testId);
+			try {
+				const specimen = construct([]);
+				const callWorker = makeCallWorker(worker);
+
+				await callWorker({type: "initRunner", runnerId: "1"});
+				await callWorker({type: "startTask", runnerId: "1", taskId: "1", param: values});
+				await callWorker({type: "waitForCalled", runnerId: "1", taskId: "1"});
+				await callWorker({type: "resolve", runnerId: "1", taskId: "1", param: {__type: specimen[Symbol.toStringTag], __value: construct(values)}});
+
+				const res1 = await runner(values);
+				assert.equal(res1[Symbol.toStringTag], specimen[Symbol.toStringTag]);
+				values.forEach((val, index) => {
+					assert.equal(res1[index], val);
+				})
+			}finally {
+				await worker.terminate();
+			}
+		}
+		it("Uint8Array", async () => {
+			return test((arg: any) => new Uint8Array(arg), [21, 31]);
+		});
+		it("Int8Array", async () => {
+			return test((arg: any) => new Int8Array(arg), [21, 31]);
+		});
+		it("Uint8ClampedArray", async () => {
+			return test((arg: any) => new Uint8ClampedArray(arg), [21, 31]);
+		});
+		it("Int16Array", async () => {
+			return test((arg: any) => new Int16Array(arg), [21, 31]);
+		});
+		it("Uint16Array", async () => {
+			return test((arg: any) => new Uint16Array(arg), [21, 31]);
+		});
+		it("Int32Array", async () => {
+			return test((arg: any) => new Int32Array(arg), [21, 31]);
+		});
+		it("Uint32Array", async () => {
+			return test((arg: any) => new Uint32Array(arg), [21, 31]);
+		});
+		/*
+		 * no nodejs support yet, should be enabled when it gets
+		it("Float16Array", async () => {
+			return test((arg: any) => new Float16Array(arg), [21, 31]);
+		});
+		*/
+		it("Float32Array", async () => {
+			return test((arg: any) => new Float32Array(arg), [21, 31]);
+		});
+		it("Float64Array", async () => {
+			return test((arg: any) => new Float64Array(arg), [21, 31]);
+		});
+		/*
+		it("BigInt64Array", async () => {
+			return test((arg: any) => new BigInt64Array(arg), [21n, 31n]);
+		});
+		it("BigUint64Array", async () => {
+			return test((arg: any) => new BigUint64Array(arg), [21n, 31n]);
+		});
+		*/
+	})
 });
 
 describe("calcCacheKey", () => {

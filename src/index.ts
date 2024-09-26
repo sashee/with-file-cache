@@ -18,15 +18,14 @@ const log = debug("with-file-cache");
 
 export const fastHash = (x: string | Buffer) => xxhash64(Buffer.from(x));
 
-// https://stackoverflow.com/a/72891118
-const readStreamToBuffer = async (stream: ReadableStream) => {
-	const buffers = [] as Buffer[];
+const readStreamToUint8Arrays = async (stream: ReadableStream) => {
+	const results = [] as Uint8Array[];
 
 	for await (const data of stream) {
-		buffers.push(data);
+		results.push(data);
 	}
 
-	return Buffer.concat(buffers);
+	return results;
 }
 
 type CacheKeyElement = string | number | Buffer | (() => AsyncOrSync<string | number | Buffer>);
@@ -46,26 +45,77 @@ type Options<T extends (...args: any[]) => any> = {
 
 
 const {defaultSerializer, defaultDeserializer} = (() => {
-	const DEFAULT_SERIALIZATION_BUFFER = Buffer.from("[[BUFFER]]", "utf8");
-	const DEFAULT_SERIALIZATION_JS = Buffer.from("[[JS]]", "utf8");
+	const supportedTypeArrays = [Uint8Array, Int8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array, /*BigInt64Array, BigUint64Array*/];
+	const defaultSerializers: {matcher: (val: unknown) => boolean, prefix: Uint8Array, serialize: (val: any) => Uint8Array, deserialize: (val: Uint8Array) => any}[] = [
+		{
+			matcher: (val: unknown) => Buffer.isBuffer(val),
+			prefix: new TextEncoder().encode("[[BUFFER]]"),
+			serialize: (val: any) => val,
+			deserialize: (val: Uint8Array) => Buffer.from(val),
+		},
+		...supportedTypeArrays.map((typedArray) => {
+			const specimen = new typedArray([]);
+			return {
+				matcher: (val: any) => val?.[Symbol.toStringTag] === specimen[Symbol.toStringTag],
+				prefix: new TextEncoder().encode(`[[TypedArray ${specimen[Symbol.toStringTag]}]]`),
+				serialize: (val: any) => new Uint8Array(val),
+				deserialize: (val: Uint8Array) => new typedArray(val),
+			};
+		}),
+		{
+			matcher: () => true,
+			prefix: new TextEncoder().encode("[[JS]]"),
+			serialize: (val: any) => Buffer.from(JSON.stringify({val})),
+			deserialize: (val: Uint8Array) => JSON.parse(new TextDecoder("utf8").decode(val)).val,
+		},
+	];
 
 	const defaultSerializer = <T> (result: T, writeable: WritableStream): Promise<void> => {
-		const buffer = Buffer.isBuffer(result) ?
-				Buffer.concat([DEFAULT_SERIALIZATION_BUFFER, result]) :
-				Buffer.concat([DEFAULT_SERIALIZATION_JS, Buffer.from(JSON.stringify({val: result}))]);
+		const matchingSerializer = defaultSerializers.find(({matcher}) => matcher(result));
+		assert(matchingSerializer);
+		const serialized = matchingSerializer.serialize(result);
+		const buffer = Buffer.concat([matchingSerializer.prefix, serialized])
 		return stream.promises.pipeline(
 			stream.Readable.from(buffer),
 			stream.Writable.fromWeb(writeable),
 		)
-	}
+	};
 
 	const defaultDeserializer = async <T> (stream: ReadableStream): Promise<T> => {
-		const serialized = await readStreamToBuffer(stream);
-		if (serialized.length >= DEFAULT_SERIALIZATION_BUFFER.length && serialized.compare(DEFAULT_SERIALIZATION_BUFFER, 0, DEFAULT_SERIALIZATION_BUFFER.length, 0, DEFAULT_SERIALIZATION_BUFFER.length) === 0) {
-			return serialized.subarray(DEFAULT_SERIALIZATION_BUFFER.length) as T;
-		}else {
-			return JSON.parse(serialized.subarray(DEFAULT_SERIALIZATION_JS.length).toString("utf8")).val as T;
-		}
+		const serialized = await readStreamToUint8Arrays(stream);
+		const checkPrefix = (chunks: Uint8Array[], prefix: Uint8Array) => {
+			return chunks.reduce(({result, lengthSoFar}, chunk) => {
+				if (result !== undefined) {
+					return {result, lengthSoFar};
+				}else {
+					const matching = prefix.every((v, i) => {
+						return i < lengthSoFar || i >= chunk.length + lengthSoFar ||
+							v === chunk[i - lengthSoFar];
+					});
+					if (!matching) {
+						return {result: false, lengthSoFar};
+					}
+					if (prefix.length <= chunk.length + lengthSoFar) {
+						return {result: true, lengthSoFar};
+					}
+					return {result, lengthSoFar: lengthSoFar + chunk.length};
+				}
+			}, {result: undefined as boolean | undefined, lengthSoFar: 0}).result === true;
+		};
+		const cutPrefix = (chunks: Uint8Array[], prefix: Uint8Array) => {
+			return chunks.reduce(({result, lengthSoFar}, chunk) => {
+				if (chunk.length + lengthSoFar >= prefix.length) {
+					result.set(chunk.subarray(Math.max(0, prefix.length - lengthSoFar)), Math.max(0, lengthSoFar - prefix.length));
+				}
+				return {
+					result,
+					lengthSoFar: lengthSoFar + chunk.length,
+				}
+			}, {result: new Uint8Array(chunks.reduce((memo, e) => e.length + memo, 0) - prefix.length), lengthSoFar: 0}).result;
+		};
+		const matchingSerializer = defaultSerializers.find(({prefix}) => checkPrefix(serialized, prefix));
+		assert(matchingSerializer);
+		return matchingSerializer.deserialize(cutPrefix(serialized, matchingSerializer.prefix));
 	};
 
 	return {
@@ -172,7 +222,7 @@ export const withFileCache = (() => {
 																		return await readFromCache();
 																	}catch(e: any) {
 																		if (e.code === "ENOENT") {
-																			return processAndWrite();
+																			return await processAndWrite();
 																		}else {
 																			throw e;
 																		}

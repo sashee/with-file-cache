@@ -68,8 +68,18 @@ parentPort!.on("message", async ({type, runnerId, taskId, requestId, param}) => 
 		}
 	}else if (type === "resolve") {
 		const resolveValue = (() => {
-			if (param.buffer) {
-				return Buffer.from(param);
+			const supportedTypeArrays = [Uint8Array, Int8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array, /*BigInt64Array, BigUint64Array*/];
+			if (param.__type) {
+				if (param.__type === "Buffer") {
+					return Buffer.from(param.__value);
+				}else {
+					const matchingTypedArray = supportedTypeArrays.find((typedArray) => new typedArray([])[Symbol.toStringTag] === param.__type);
+					if (matchingTypedArray) {
+						return new matchingTypedArray(param.__value);
+					}else {
+						throw new Error("Unknown: " + param.__type);
+					}
+				}
 			}else {
 				return param;
 			}
