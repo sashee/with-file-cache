@@ -9,10 +9,12 @@
     "noImplicitReturns": true,
     "noPropertyAccessFromIndexSignature": true,
 
+		"rewriteRelativeImportExtensions": true,
+		"erasableSyntaxOnly": true,
+		"verbatimModuleSyntax": true,
+
     "sourceMap": true,
-    "target": "es2022",
-		"module": "es2022",
-    "moduleResolution": "bundler",
+		"module": "nodenext",
 		"declaration": true,
     "outDir": "dist"
   },

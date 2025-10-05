@@ -1,14 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import findCacheDir from "find-cache-dir";
-import {AsyncOrSync} from "ts-essentials";
+import findCacheDir from "find-cache-directory";
+import type {AsyncOrSync, ValueOf} from "ts-essentials";
 import {isMainThread, BroadcastChannel, threadId} from "node:worker_threads";
 import { strict as assert } from "node:assert";
-import {ValueOf} from "ts-essentials";
 import {Observable, firstValueFrom} from "rxjs";
-import {share, filter, first, tap} from "rxjs/operators";
-import util from "node:util";
+import {share, filter} from "rxjs/operators";
 import debug from "debug";
 import stream from "node:stream";
 import {ReadableStream, WritableStream} from "node:stream/web";

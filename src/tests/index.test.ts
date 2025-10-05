@@ -1,17 +1,17 @@
 import {describe, it, mock} from "node:test";
 import { strict as assert } from "node:assert";
-import {withFileCache} from "../index.js";
+import {withFileCache} from "../index.ts";
 import crypto from "node:crypto";
 import {Worker, BroadcastChannel} from "node:worker_threads";
 import path from "node:path";
 import url from "node:url";
-import {AsyncOrSync, ValueOf} from "ts-essentials";
+import type {AsyncOrSync, ValueOf} from "ts-essentials";
 import {Observable, firstValueFrom} from "rxjs";
-import {share, filter, first, tap} from "rxjs/operators";
+import {share, filter} from "rxjs/operators";
 import util from "node:util";
 import debug from "debug";
 import stream from "node:stream";
-import {ReadableStream, WritableStream} from "node:stream/web";
+import {ReadableStream} from "node:stream/web";
 
 const log = debug("with-file-cache:test");
 

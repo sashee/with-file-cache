@@ -1,7 +1,7 @@
-import {withFileCache} from "../index.js";
+import {withFileCache} from "../index.ts";
 import {workerData, parentPort} from "node:worker_threads";
 import {mock} from "node:test";
-import {AsyncOrSync} from "ts-essentials";
+import type {AsyncOrSync} from "ts-essentials";
 import {setTimeout} from "node:timers/promises";
 import util from "node:util";
 import debug from "debug";
